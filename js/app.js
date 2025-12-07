@@ -73,7 +73,8 @@ const state = {
   isAdmin: false,
   adminKey: null,
   adminHint: '',
-  adminStatusTimer: null
+  adminStatusTimer: null,
+  likedPosts: new Set()
 };
 
 async function fetchJSON(path, fallbackPath) {
@@ -89,8 +90,42 @@ async function fetchJSON(path, fallbackPath) {
   }
 }
 
+function hydrateAdminPreferences() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('vx-liked-posts');
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      state.likedPosts = new Set(parsed);
+    }
+  } catch (error) {
+    console.warn('Unable to hydrate liked posts', error);
+    state.likedPosts = new Set();
+  }
+}
+
+function persistAdminLikes() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const payload = Array.from(state.likedPosts);
+    if (payload.length) {
+      localStorage.setItem('vx-liked-posts', JSON.stringify(payload));
+    } else {
+      localStorage.removeItem('vx-liked-posts');
+    }
+  } catch (error) {
+    console.warn('Unable to persist liked posts', error);
+  }
+}
+
+function isPostLiked(slug) {
+  return Boolean(slug && state.likedPosts?.has(slug));
+}
+
 async function init() {
   try {
+    hydrateAdminPreferences();
     const profile = await fetchJSON(profilePath, profileFallbackPath);
     const posts = await fetchJSON(postsPath, postsFallbackPath).catch((error) => {
       console.warn('Posts data missing. Run publish automation.', error);
@@ -415,6 +450,18 @@ function renderBlogCards(posts) {
           handleDeletePost(button.dataset.deleteSlug, button.dataset.draft === 'true')
         )
       );
+    $.blogGrid
+      .querySelectorAll('button[data-admin-read]')
+      .forEach((button) =>
+        button.addEventListener('click', () =>
+          openPostPanel(state.blogPosts.find((post) => post.slug === button.dataset.adminRead))
+        )
+      );
+    $.blogGrid
+      .querySelectorAll('button[data-like-slug]')
+      .forEach((button) =>
+        button.addEventListener('click', () => togglePostLike(button.dataset.likeSlug))
+      );
   }
 }
 
@@ -454,10 +501,17 @@ function adminControlsTemplate(post) {
   const deleteButton = post.isDraft
     ? `<button class="btn danger small" data-delete-slug="${post.slug}" data-draft="true">Remove draft</button>`
     : '';
+  const readButton = `<button class="btn ghost small" data-admin-read="${post.slug}">Read</button>`;
+  const isLiked = isPostLiked(post.slug);
+  const likeButton = `<button class="btn ghost small" data-like-slug="${post.slug}" data-liked="${isLiked}">${
+    isLiked ? 'Unlike' : 'Like'
+  }</button>`;
   return `
     <div class="admin-controls">
       <span class="admin-flag">${flag}</span>
       ${sourceButton}
+      ${readButton}
+      ${likeButton}
       ${deleteButton}
       <a class="btn primary small" href="https://www.linkedin.com/sharing/share-offsite/?url=${shareUrl}" target="_blank" rel="noopener">Share on LinkedIn</a>
     </div>
@@ -836,6 +890,27 @@ async function handleDeletePost(slug, isDraft) {
   } catch (error) {
     alert(error.message || 'Unable to delete post.');
   }
+}
+
+function togglePostLike(slug) {
+  if (!slug) return;
+  if (!state.isAdmin) {
+    alert('Log in as admin to like posts.');
+    return;
+  }
+  if (!state.likedPosts) {
+    state.likedPosts = new Set();
+  }
+  const currentlyLiked = state.likedPosts.has(slug);
+  if (currentlyLiked) {
+    state.likedPosts.delete(slug);
+    setTemporaryAdminMessage('Removed like from post.');
+  } else {
+    state.likedPosts.add(slug);
+    setTemporaryAdminMessage('Post marked as liked.');
+  }
+  persistAdminLikes();
+  refreshBlogAdminView();
 }
 
 function getComposerData() {
